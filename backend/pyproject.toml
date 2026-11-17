@@ -14,7 +14,9 @@ dev = [
     "pytest>=8.3",
     "pytest-django>=4.9",
     "ruff~=0.17",
-    "mypy~=2.4"
+    "mypy~=2.4",
+    "django-stubs~=5.2",
+    "djangorestframework-stubs~=3.16",
 ]
 
 [tool.uv]
@@ -25,3 +27,29 @@ DJANGO_SETTINGS_MODULE = "config.settings"
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+
+# Formatting/linting/type-checking
+# Too big a diff to apply codebase-wide, so just focus on work I'll be doing.
+[tool.ruff]
+line-length = 100
+extend-exclude = ["accounts", "contracts", "config", "core", "webhooks", "conftest.py", "manage.py"]
+force-exclude = true
+
+[tool.ruff.format]
+quote-style = "single"
+
+[tool.ruff.lint]
+extend-select = ["I"]
+ignore = ["RUF012"]
+
+[tool.mypy]
+strict = true
+plugins = ["mypy_django_plugin.main", "mypy_drf_plugin.main"]
+exclude = ["(^|/)migrations/"]
+
+[tool.django-stubs]
+django_settings_module = "config.settings"
+
+[[tool.mypy.overrides]]
+module = ["accounts.*", "contracts.*", "config.*", "core.*", "webhooks.*", "conftest", "manage"]
+ignore_errors = true
