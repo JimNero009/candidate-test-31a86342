@@ -1,12 +1,41 @@
+from django.contrib.auth.models import User
 from django.db import models
 
 from accounts.models import Company, Freelancer
 from contracts.models import TimesheetEntry
 
+from .enums import BillingRunStatus
+
+# Lot of use of PROTECT _for now_ -- a bit of a product decision regarding e.g. deletion of Company and Freelancer objects
+# Take the view that e.g. Invoices are immutable financial objects that we need to do _something_ about, purposely
+
+
+class BillingRun(models.Model):
+    company = models.ForeignKey(Company, on_delete=models.PROTECT)
+    period_start = models.DateField()
+    period_end = models.DateField()
+    triggered_by = models.ForeignKey(User, on_delete=models.PROTECT)
+    status = models.CharField(
+        max_length=20,
+        choices=[(status.value, status.name.title()) for status in BillingRunStatus],
+        default=BillingRunStatus.PENDING,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(period_end__gte=models.F('period_start')),
+                name='billing_run_period_end_after_start',
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f'Billing run {self.pk}: {self.company} ({self.period_start} – {self.period_end})'
+
 
 class Invoice(models.Model):
-    # PROTECT _for now_ -- a bit of a product decision regarding e.g. deletion of Company and Freelancer objects
-    # So just take the view that Invoices are immutable financial objects that we need to do _something_ about, purposely
+    billing_run = models.ForeignKey(BillingRun, on_delete=models.PROTECT)
     company = models.ForeignKey(Company, on_delete=models.PROTECT)
     freelancer = models.ForeignKey(Freelancer, on_delete=models.PROTECT)
 
