@@ -1,1 +1,2 @@
 - Won't go with a service layer approach. Reason: 'treat this like a PR into an existing code base'. The existing code base does not have this pattern, so be consistent.
+- Work on sorting out a sensible data model first, that will inform how the endpoints look/behave

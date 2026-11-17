@@ -32,7 +32,7 @@ python_functions = ["test_*"]
 # Too big a diff to apply codebase-wide, so just focus on work I'll be doing.
 [tool.ruff]
 line-length = 100
-extend-exclude = ["accounts", "contracts", "config", "core", "webhooks", "conftest.py", "manage.py"]
+extend-exclude = ["accounts", "contracts", "config", "core", "webhooks", "conftest.py", "manage.py", "*/migrations/*"]
 force-exclude = true
 
 [tool.ruff.format]
