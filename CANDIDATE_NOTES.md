@@ -1,2 +1,4 @@
 - Won't go with a service layer approach. Reason: 'treat this like a PR into an existing code base'. The existing code base does not have this pattern, so be consistent.
 - Work on sorting out a sensible data model first, that will inform how the endpoints look/behave
+- 'Company Admin' feels like a more global auth thing, do that rather than in-module
+- `TimesheetEntry` statuses are plain `STATUS_*` string constants, so billing code and tests can only type them as `str`. Follow-up: a `TimesheetEntryStatus` StrEnum in `contracts/enums.py` (as with `BillingRunStatus`), keeping the `STATUS_*` names as aliases so existing callers and migrations are unaffected.
