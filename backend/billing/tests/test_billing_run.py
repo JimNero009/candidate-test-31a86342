@@ -220,15 +220,34 @@ def test_run_allows_month_from_its_first_day(admin_client: APIClient) -> None:
 
 @pytest.mark.django_db
 @freeze_time('2026-05-15')
-def test_run_bills_current_month_part_way_through(
+def test_run_part_way_through_month_bills_only_up_to_today(
     admin_client: APIClient, active_contract: Contract
 ) -> None:
-    billed_so_far = make_entry(active_contract, datetime.date(2026, 5, 1))
+    start_of_month = make_entry(active_contract, datetime.date(2026, 5, 1))
+    today = make_entry(active_contract, datetime.date(2026, 5, 15))
+    make_entry(active_contract, datetime.date(2026, 5, 16))
 
     resp = admin_client.post('/api/billing/runs/', {'month': '2026-05'}, format='json')
 
     assert resp.status_code == 201
-    assert _billed_entry_ids() == {billed_so_far.pk}
+    assert _billed_entry_ids() == {start_of_month.pk, today.pk}
+    assert Invoice.objects.get().period_end == datetime.date(2026, 5, 31)
+
+
+@pytest.mark.django_db
+def test_future_dated_entry_is_billed_once_its_date_has_passed(
+    admin_client: APIClient, active_contract: Contract
+) -> None:
+    future_dated = make_entry(active_contract, datetime.date(2026, 5, 20))
+    with freeze_time('2026-05-15'):
+        admin_client.post('/api/billing/runs/', {'month': '2026-05'}, format='json')
+    assert not Invoice.objects.exists()
+
+    with freeze_time('2026-06-01'):
+        admin_client.post('/api/billing/runs/', {'month': '2026-05'}, format='json')
+
+    assert _billed_entry_ids() == {future_dated.pk}
+    assert Invoice.objects.count() == 1
 
 
 @pytest.mark.django_db

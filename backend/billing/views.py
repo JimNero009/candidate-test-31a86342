@@ -48,18 +48,18 @@ def _parse_month(raw: object) -> tuple[datetime.date, datetime.date]:
 
 
 # Email sending lives here for now, alongside the run; see CANDIDATE_NOTES.md.
-def _current_address(email: InvoiceEmail) -> str:
+def _current_address(email: InvoiceEmail, invoice: Invoice) -> str:
     match InvoiceEmailRecipient(email.recipient):
         case InvoiceEmailRecipient.COMPANY:
-            return email.invoice.company.billing_email
+            return invoice.company.billing_email
         case InvoiceEmailRecipient.FREELANCER:
-            return email.invoice.freelancer.user.email
+            return invoice.freelancer.user.email
 
 
 def _attempt_send(email: InvoiceEmail) -> None:
     invoice = (
-        _company_invoices(email.invoice.company_id)
-        .select_related('company')
+        _invoices_with_totals()
+        .select_related('company', 'freelancer__user')
         .get(pk=email.invoice_id)
     )
     body = render_to_string(
@@ -70,7 +70,7 @@ def _attempt_send(email: InvoiceEmail) -> None:
         f'Invoice {invoice.pk}: {invoice.freelancer.name} for {invoice.company.name}, '
         f'{invoice.period_start} to {invoice.period_end}'
     )
-    email.to_address = _current_address(email)
+    email.to_address = _current_address(email, invoice)
     try:
         send_mail(subject, body, None, [email.to_address])
     except (SMTPException, OSError) as exc:
@@ -88,8 +88,7 @@ def _send_invoice_emails(email_ids: list[int]) -> None:
         # One transaction per email, so a slow or failing send doesn't hold the others.
         with transaction.atomic():
             email = (
-                InvoiceEmail.objects.select_for_update(skip_locked=True, of=('self',))
-                .select_related('invoice__company', 'invoice__freelancer__user')
+                InvoiceEmail.objects.select_for_update(skip_locked=True)
                 .exclude(status=InvoiceEmailStatus.SENT)
                 .filter(pk=email_id)
                 .first()
@@ -104,8 +103,10 @@ class BillingRunView(APIView):
     def post(self, request: Request) -> Response:
         admin = _company_admin(request)
         period_start, period_end = _parse_month(request.data.get('month'))
-        if period_start > timezone.localdate():
+        today = timezone.localdate()
+        if period_start > today:
             raise ValidationError({'month': 'Months that have not started cannot be billed.'})
+        billable_until = min(period_end, today)
 
         with transaction.atomic():
             # Serialises concurrent runs for the same company.
@@ -121,7 +122,7 @@ class BillingRunView(APIView):
                 TimesheetEntry.objects.filter(
                     contract__company=company,
                     status=TimesheetEntry.STATUS_APPROVED,
-                    date__range=(period_start, period_end),
+                    date__range=(period_start, billable_until),
                     invoiceline__isnull=True,
                 )
                 .select_related('contract__freelancer__user')
@@ -194,12 +195,12 @@ class BillingRunView(APIView):
         )
 
 
+def _invoices_with_totals() -> QuerySet[Invoice]:
+    return Invoice.objects.annotate(total=Sum('invoiceline__daily_rate'))
+
+
 def _company_invoices(company_id: int) -> QuerySet[Invoice]:
-    return (
-        Invoice.objects.filter(company_id=company_id)
-        .select_related('freelancer')
-        .annotate(total=Sum('invoiceline__daily_rate'))
-    )
+    return _invoices_with_totals().filter(company_id=company_id).select_related('freelancer')
 
 
 class InvoiceListView(APIView):
