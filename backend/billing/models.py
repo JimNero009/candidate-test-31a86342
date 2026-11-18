@@ -4,7 +4,7 @@ from django.db import models
 from accounts.models import Company, Freelancer
 from contracts.models import TimesheetEntry
 
-from .enums import BillingRunStatus
+from .enums import BillingRunStatus, InvoiceEmailRecipient, InvoiceEmailStatus
 
 # Lot of use of PROTECT _for now_ -- a bit of a product decision regarding e.g. deletion of Company and Freelancer objects
 # Take the view that e.g. Invoices are immutable financial objects that we need to do _something_ about, purposely
@@ -72,3 +72,29 @@ class InvoiceLine(models.Model):
 
     def __str__(self) -> str:
         return f'Invoice {self.invoice_id} line: {self.date} @ {self.daily_rate}'
+
+
+class InvoiceEmail(models.Model):
+    invoice = models.ForeignKey(Invoice, on_delete=models.CASCADE)
+    recipient = models.CharField(
+        max_length=20,
+        choices=[(recipient.value, recipient.name.title()) for recipient in InvoiceEmailRecipient],
+    )
+    to_address = models.EmailField()
+    status = models.CharField(
+        max_length=20,
+        choices=[(status.value, status.name.title()) for status in InvoiceEmailStatus],
+        default=InvoiceEmailStatus.PENDING,
+    )
+    last_error = models.TextField(blank=True)
+    sent_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['invoice', 'recipient'], name='unique_invoice_email_recipient'
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f'Invoice {self.invoice_id} email to {self.recipient} ({self.status})'
