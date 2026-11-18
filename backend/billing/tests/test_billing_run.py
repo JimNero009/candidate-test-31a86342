@@ -8,8 +8,8 @@ from django.db import DatabaseError
 from freezegun import freeze_time
 from rest_framework.test import APIClient
 
-from billing.enums import BillingRunStatus
-from billing.models import BillingRun, Invoice, InvoiceLine
+from billing.enums import BillingRunStatus, InvoiceEmailRecipient, InvoiceEmailStatus
+from billing.models import BillingRun, Invoice, InvoiceEmail, InvoiceLine
 from billing.tests.factories import make_contract, make_entry, make_freelancer
 from contracts.models import Contract, TimesheetEntry
 
@@ -45,6 +45,58 @@ def test_run_creates_one_invoice_per_freelancer_with_a_line_per_entry(
     assert list(second_invoice.invoiceline_set.values_list('daily_rate', flat=True)) == [
         Decimal('400.00')
     ]
+
+
+@pytest.mark.django_db
+def test_run_queues_a_pending_email_to_company_and_freelancer_per_invoice(
+    admin_client: APIClient, active_contract: Contract
+) -> None:
+    second_freelancer = make_freelancer()
+    second_contract = make_contract(active_contract.company, second_freelancer)
+    make_entry(active_contract, datetime.date(2026, 4, 1))
+    make_entry(second_contract, datetime.date(2026, 4, 1))
+
+    admin_client.post('/api/billing/runs/', {'month': '2026-04'}, format='json')
+
+    billing_email = active_contract.company.billing_email
+    assert set(
+        InvoiceEmail.objects.values_list(
+            'invoice__freelancer_id', 'recipient', 'to_address', 'status', 'last_error', 'sent_at'
+        )
+    ) == {
+        (
+            active_contract.freelancer.pk,
+            InvoiceEmailRecipient.COMPANY,
+            billing_email,
+            InvoiceEmailStatus.PENDING,
+            '',
+            None,
+        ),
+        (
+            active_contract.freelancer.pk,
+            InvoiceEmailRecipient.FREELANCER,
+            active_contract.freelancer.user.email,
+            InvoiceEmailStatus.PENDING,
+            '',
+            None,
+        ),
+        (
+            second_freelancer.pk,
+            InvoiceEmailRecipient.COMPANY,
+            billing_email,
+            InvoiceEmailStatus.PENDING,
+            '',
+            None,
+        ),
+        (
+            second_freelancer.pk,
+            InvoiceEmailRecipient.FREELANCER,
+            second_freelancer.user.email,
+            InvoiceEmailStatus.PENDING,
+            '',
+            None,
+        ),
+    }
 
 
 @pytest.mark.django_db
@@ -86,7 +138,7 @@ def test_run_only_bills_approved_entries_in_the_month_for_own_company(
 
 
 @pytest.mark.django_db
-def test_rerun_with_nothing_new_creates_no_invoices(
+def test_rerun_with_nothing_new_creates_no_invoices_or_emails(
     admin_client: APIClient, active_contract: Contract
 ) -> None:
     make_entry(active_contract, datetime.date(2026, 4, 1))
@@ -96,6 +148,7 @@ def test_rerun_with_nothing_new_creates_no_invoices(
 
     assert resp.json()['invoices_generated'] == 0
     assert Invoice.objects.count() == 1
+    assert InvoiceEmail.objects.count() == 2
 
 
 @pytest.mark.django_db
@@ -194,6 +247,7 @@ def test_run_that_fails_part_way_saves_nothing(
 
     assert not BillingRun.objects.exists()
     assert not Invoice.objects.exists()
+    assert not InvoiceEmail.objects.exists()
 
 
 @pytest.mark.django_db

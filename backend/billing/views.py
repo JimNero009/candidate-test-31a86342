@@ -13,12 +13,12 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from accounts.models import Company, CompanyAdmin
+from accounts.models import Company, CompanyAdmin, Freelancer
 from accounts.permissions import IsCompanyAdmin
 from contracts.models import TimesheetEntry
 
-from .enums import BillingRunStatus
-from .models import BillingRun, Invoice, InvoiceLine
+from .enums import BillingRunStatus, InvoiceEmailRecipient
+from .models import BillingRun, Invoice, InvoiceEmail, InvoiceLine
 from .serializers import InvoiceDetailSerializer, InvoiceSerializer
 
 
@@ -69,22 +69,22 @@ class BillingRunView(APIView):
                     date__range=(period_start, period_end),
                     invoiceline__isnull=True,
                 )
-                .select_related('contract')
+                .select_related('contract__freelancer__user')
                 .order_by('date')
             )
-            entries_by_freelancer: defaultdict[int, list[TimesheetEntry]] = defaultdict(list)
+            entries_by_freelancer: defaultdict[Freelancer, list[TimesheetEntry]] = defaultdict(list)
             for entry in unbilled_entries:
-                entries_by_freelancer[entry.contract.freelancer_id].append(entry)
+                entries_by_freelancer[entry.contract.freelancer].append(entry)
 
             invoices = Invoice.objects.bulk_create(
                 Invoice(
                     billing_run=run,
                     company=company,
-                    freelancer_id=freelancer_id,
+                    freelancer=freelancer,
                     period_start=period_start,
                     period_end=period_end,
                 )
-                for freelancer_id in entries_by_freelancer
+                for freelancer in entries_by_freelancer
             )
             InvoiceLine.objects.bulk_create(
                 InvoiceLine(
@@ -95,7 +95,23 @@ class BillingRunView(APIView):
                     daily_rate=entry.contract.daily_rate,
                 )
                 for invoice in invoices
-                for entry in entries_by_freelancer[invoice.freelancer_id]
+                for entry in entries_by_freelancer[invoice.freelancer]
+            )
+            InvoiceEmail.objects.bulk_create(
+                email
+                for invoice in invoices
+                for email in (
+                    InvoiceEmail(
+                        invoice=invoice,
+                        recipient=InvoiceEmailRecipient.COMPANY,
+                        to_address=company.billing_email,
+                    ),
+                    InvoiceEmail(
+                        invoice=invoice,
+                        recipient=InvoiceEmailRecipient.FREELANCER,
+                        to_address=invoice.freelancer.user.email,
+                    ),
+                )
             )
 
             run.status = BillingRunStatus.COMPLETED
