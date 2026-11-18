@@ -8,31 +8,10 @@ from django.db import DatabaseError
 from freezegun import freeze_time
 from rest_framework.test import APIClient
 
-from accounts.models import Freelancer
 from billing.enums import BillingRunStatus
 from billing.models import BillingRun, Invoice, InvoiceLine
+from billing.tests.factories import make_contract, make_entry, make_freelancer
 from contracts.models import Contract, TimesheetEntry
-
-
-@pytest.fixture
-def second_contract(active_contract: Contract) -> Contract:
-    user = User.objects.create_user(username='second@test.test', email='second@test.test')
-    return Contract.objects.create(
-        company=active_contract.company,
-        freelancer=Freelancer.objects.create(user=user, name='Second Freelancer'),
-        daily_rate=Decimal('400.00'),
-        start_date=datetime.date(2026, 1, 1),
-        end_date=datetime.date(2026, 12, 31),
-    )
-
-
-def _entry(
-    contract: Contract,
-    day: datetime.date,
-    status: str = TimesheetEntry.STATUS_APPROVED,
-    hours: Decimal = Decimal('8.00'),
-) -> TimesheetEntry:
-    return TimesheetEntry.objects.create(contract=contract, date=day, hours=hours, status=status)
 
 
 def _billed_entry_ids() -> set[int]:
@@ -41,11 +20,12 @@ def _billed_entry_ids() -> set[int]:
 
 @pytest.mark.django_db
 def test_run_creates_one_invoice_per_freelancer_with_a_line_per_entry(
-    admin_client: APIClient, active_contract: Contract, second_contract: Contract
+    admin_client: APIClient, active_contract: Contract
 ) -> None:
-    _entry(active_contract, datetime.date(2026, 4, 1))
-    _entry(active_contract, datetime.date(2026, 4, 2), hours=Decimal('7.50'))
-    _entry(second_contract, datetime.date(2026, 4, 1))
+    second_contract = make_contract(active_contract.company, make_freelancer())
+    make_entry(active_contract, datetime.date(2026, 4, 1))
+    make_entry(active_contract, datetime.date(2026, 4, 2), hours=Decimal('7.50'))
+    make_entry(second_contract, datetime.date(2026, 4, 1))
 
     resp = admin_client.post('/api/billing/runs/', {'month': '2026-04'}, format='json')
 
@@ -71,15 +51,11 @@ def test_run_creates_one_invoice_per_freelancer_with_a_line_per_entry(
 def test_freelancer_with_two_contracts_at_the_company_gets_one_invoice(
     admin_client: APIClient, active_contract: Contract
 ) -> None:
-    second_engagement = Contract.objects.create(
-        company=active_contract.company,
-        freelancer=active_contract.freelancer,
-        daily_rate=Decimal('650.00'),
-        start_date=datetime.date(2026, 1, 1),
-        end_date=datetime.date(2026, 12, 31),
+    second_engagement = make_contract(
+        active_contract.company, active_contract.freelancer, daily_rate=Decimal('650.00')
     )
-    _entry(active_contract, datetime.date(2026, 4, 1))
-    _entry(second_engagement, datetime.date(2026, 4, 2))
+    make_entry(active_contract, datetime.date(2026, 4, 1))
+    make_entry(second_engagement, datetime.date(2026, 4, 2))
 
     resp = admin_client.post('/api/billing/runs/', {'month': '2026-04'}, format='json')
 
@@ -95,14 +71,14 @@ def test_freelancer_with_two_contracts_at_the_company_gets_one_invoice(
 def test_run_only_bills_approved_entries_in_the_month_for_own_company(
     admin_client: APIClient, active_contract: Contract, other_contract: Contract
 ) -> None:
-    billable = _entry(active_contract, datetime.date(2026, 4, 1))
-    _entry(active_contract, datetime.date(2026, 4, 2), status=TimesheetEntry.STATUS_SUBMITTED)
-    _entry(active_contract, datetime.date(2026, 4, 3), status=TimesheetEntry.STATUS_DRAFT)
-    _entry(active_contract, datetime.date(2026, 4, 6), status=TimesheetEntry.STATUS_REJECTED)
-    last_day = _entry(active_contract, datetime.date(2026, 4, 30))
-    _entry(active_contract, datetime.date(2026, 3, 31))
-    _entry(active_contract, datetime.date(2026, 5, 1))
-    _entry(other_contract, datetime.date(2026, 4, 1))
+    billable = make_entry(active_contract, datetime.date(2026, 4, 1))
+    make_entry(active_contract, datetime.date(2026, 4, 2), status=TimesheetEntry.STATUS_SUBMITTED)
+    make_entry(active_contract, datetime.date(2026, 4, 3), status=TimesheetEntry.STATUS_DRAFT)
+    make_entry(active_contract, datetime.date(2026, 4, 6), status=TimesheetEntry.STATUS_REJECTED)
+    last_day = make_entry(active_contract, datetime.date(2026, 4, 30))
+    make_entry(active_contract, datetime.date(2026, 3, 31))
+    make_entry(active_contract, datetime.date(2026, 5, 1))
+    make_entry(other_contract, datetime.date(2026, 4, 1))
 
     admin_client.post('/api/billing/runs/', {'month': '2026-04'}, format='json')
 
@@ -113,7 +89,7 @@ def test_run_only_bills_approved_entries_in_the_month_for_own_company(
 def test_rerun_with_nothing_new_creates_no_invoices(
     admin_client: APIClient, active_contract: Contract
 ) -> None:
-    _entry(active_contract, datetime.date(2026, 4, 1))
+    make_entry(active_contract, datetime.date(2026, 4, 1))
     admin_client.post('/api/billing/runs/', {'month': '2026-04'}, format='json')
 
     resp = admin_client.post('/api/billing/runs/', {'month': '2026-04'}, format='json')
@@ -126,8 +102,8 @@ def test_rerun_with_nothing_new_creates_no_invoices(
 def test_entry_approved_after_run_goes_on_a_supplementary_invoice(
     admin_client: APIClient, active_contract: Contract
 ) -> None:
-    _entry(active_contract, datetime.date(2026, 4, 1))
-    late = _entry(
+    make_entry(active_contract, datetime.date(2026, 4, 1))
+    late = make_entry(
         active_contract, datetime.date(2026, 4, 2), status=TimesheetEntry.STATUS_SUBMITTED
     )
     admin_client.post('/api/billing/runs/', {'month': '2026-04'}, format='json')
@@ -194,7 +170,7 @@ def test_run_allows_month_from_its_first_day(admin_client: APIClient) -> None:
 def test_run_bills_current_month_part_way_through(
     admin_client: APIClient, active_contract: Contract
 ) -> None:
-    billed_so_far = _entry(active_contract, datetime.date(2026, 5, 1))
+    billed_so_far = make_entry(active_contract, datetime.date(2026, 5, 1))
 
     resp = admin_client.post('/api/billing/runs/', {'month': '2026-05'}, format='json')
 
@@ -206,7 +182,7 @@ def test_run_bills_current_month_part_way_through(
 def test_run_that_fails_part_way_saves_nothing(
     admin_client: APIClient, active_contract: Contract, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _entry(active_contract, datetime.date(2026, 4, 1))
+    make_entry(active_contract, datetime.date(2026, 4, 1))
 
     def _fail(*args: object, **kwargs: object) -> NoReturn:
         raise DatabaseError('insert failed')

@@ -4,6 +4,7 @@ from collections import defaultdict
 
 from django.contrib.auth.models import User
 from django.db import transaction
+from django.db.models import Sum
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.exceptions import PermissionDenied, ValidationError
@@ -18,6 +19,7 @@ from contracts.models import TimesheetEntry
 
 from .enums import BillingRunStatus
 from .models import BillingRun, Invoice, InvoiceLine
+from .serializers import InvoiceSerializer
 
 
 def _company_admin(request: Request) -> CompanyAdmin:
@@ -110,10 +112,22 @@ class BillingRunView(APIView):
 
 
 class InvoiceListView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsCompanyAdmin]
 
     def get(self, request: Request) -> Response:
-        return Response([])
+        admin = _company_admin(request)
+        period_start, period_end = _parse_month(request.query_params.get('month'))
+        invoices = (
+            Invoice.objects.filter(
+                company_id=admin.company_id,
+                period_start__lte=period_end,
+                period_end__gte=period_start,
+            )
+            .select_related('freelancer')
+            .annotate(total=Sum('invoiceline__daily_rate'))
+            .order_by('freelancer__name', 'id')
+        )
+        return Response(InvoiceSerializer(invoices, many=True).data)
 
 
 class InvoiceDetailView(APIView):
