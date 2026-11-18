@@ -4,5 +4,7 @@
 - `TimesheetEntry` statuses are plain `STATUS_*` string constants, so billing code and tests can only type them as `str`. Follow-up: a `TimesheetEntryStatus` StrEnum in `contracts/enums.py` (as with `BillingRunStatus`), keeping the `STATUS_*` names as aliases so existing callers and migrations are unaffected.
 - Invoice list `?month=` matches invoices whose period overlaps the month, not only exact calendar-month periods. Identical today, but keeps working if billing periods stop being calendar months (the reason for `period_start`/`period_end`).
 - Invoice list requires `month` (400 if missing or malformed), same as the run endpoint, rather than returning an unbounded list nobody asked for. No pagination, consistent with the rest of the API; a company-month list is bounded by its freelancer count.
-- Invoice `total` is annotated in the list query (`Sum` of line daily rates) rather than stored, since it's a plain sum of stored, immutable line amounts.
+- Invoice `total` is annotated in the query (`Sum` of line daily rates) rather than stored, since it's a plain sum of stored, immutable line amounts. List and detail share one queryset helper so the total is defined once.
+- Invoice detail returns 404, not 403, for another company's invoice, so invoice IDs can't be probed; matches `ContractDetailView`.
+- Invoice detail includes `company` (name, billing email) since it represents the invoice as a document; the list omits it because it's always the admin's own company. Lines have no separate `amount`: each line bills its `daily_rate`, so an extra field would duplicate it.
 - Only company admins can see invoices. Freelancers seeing their own invoices is a natural follow-up, out of scope here.

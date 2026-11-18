@@ -4,10 +4,10 @@ from collections import defaultdict
 
 from django.contrib.auth.models import User
 from django.db import transaction
-from django.db.models import Sum
+from django.db.models import Prefetch, QuerySet, Sum
 from django.utils import timezone
 from rest_framework import status
-from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -19,7 +19,7 @@ from contracts.models import TimesheetEntry
 
 from .enums import BillingRunStatus
 from .models import BillingRun, Invoice, InvoiceLine
-from .serializers import InvoiceSerializer
+from .serializers import InvoiceDetailSerializer, InvoiceSerializer
 
 
 def _company_admin(request: Request) -> CompanyAdmin:
@@ -111,6 +111,14 @@ class BillingRunView(APIView):
         )
 
 
+def _company_invoices(company_id: int) -> QuerySet[Invoice]:
+    return (
+        Invoice.objects.filter(company_id=company_id)
+        .select_related('freelancer')
+        .annotate(total=Sum('invoiceline__daily_rate'))
+    )
+
+
 class InvoiceListView(APIView):
     permission_classes = [IsAuthenticated, IsCompanyAdmin]
 
@@ -118,20 +126,27 @@ class InvoiceListView(APIView):
         admin = _company_admin(request)
         period_start, period_end = _parse_month(request.query_params.get('month'))
         invoices = (
-            Invoice.objects.filter(
-                company_id=admin.company_id,
-                period_start__lte=period_end,
-                period_end__gte=period_start,
-            )
-            .select_related('freelancer')
-            .annotate(total=Sum('invoiceline__daily_rate'))
+            _company_invoices(admin.company_id)
+            .filter(period_start__lte=period_end, period_end__gte=period_start)
             .order_by('freelancer__name', 'id')
         )
         return Response(InvoiceSerializer(invoices, many=True).data)
 
 
 class InvoiceDetailView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsCompanyAdmin]
 
     def get(self, request: Request, pk: int) -> Response:
-        return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
+        admin = _company_admin(request)
+        try:
+            invoice = (
+                _company_invoices(admin.company_id)
+                .select_related('company')
+                .prefetch_related(
+                    Prefetch('invoiceline_set', queryset=InvoiceLine.objects.order_by('date', 'id'))
+                )
+                .get(pk=pk)
+            )
+        except Invoice.DoesNotExist:
+            raise NotFound from None
+        return Response(InvoiceDetailSerializer(invoice).data)
