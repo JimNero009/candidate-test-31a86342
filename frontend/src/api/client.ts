@@ -44,8 +44,26 @@ export interface BillingRunResult {
 }
 
 export interface Invoice {
-  id: string | number
-  [key: string]: unknown
+  id: number
+  billing_run: number
+  freelancer: FreelancerProfile
+  period_start: string
+  period_end: string
+  total: string
+  created_at: string
+}
+
+export interface InvoiceLine {
+  id: number
+  timesheet_entry: number
+  date: string
+  hours: string
+  daily_rate: string
+}
+
+export interface InvoiceWithLines extends Invoice {
+  company: Company
+  lines: InvoiceLine[]
 }
 
 export interface WebhookEndpoint {
