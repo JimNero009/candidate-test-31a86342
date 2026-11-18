@@ -2,10 +2,18 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { runBilling, fetchInvoices } from '../api/billing'
+import { ApiError } from '../api/client'
 
 function currentMonth() {
   const now = new Date()
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+}
+
+function runErrorMessage(error: Error): string {
+  if (error instanceof ApiError && typeof error.data.month === 'string') {
+    return error.data.month
+  }
+  return 'Billing run failed. Please try again.'
 }
 
 export default function Billing() {
@@ -27,8 +35,8 @@ export default function Billing() {
       setRunError(null)
       invoicesQuery.refetch()
     },
-    onError: () => {
-      setRunError('Billing run failed. Please try again.')
+    onError: (error) => {
+      setRunError(runErrorMessage(error))
       setRunResult(null)
     },
   })

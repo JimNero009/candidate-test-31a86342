@@ -47,8 +47,8 @@ class BillingRunView(APIView):
     def post(self, request: Request) -> Response:
         admin = _company_admin(request)
         period_start, period_end = _parse_month(request.data.get('month'))
-        if period_end >= timezone.localdate():
-            raise ValidationError({'month': 'Only months that have ended can be billed.'})
+        if period_start > timezone.localdate():
+            raise ValidationError({'month': 'Months that have not started cannot be billed.'})
 
         with transaction.atomic():
             # Serialises concurrent runs for the same company.

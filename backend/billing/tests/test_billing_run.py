@@ -173,19 +173,33 @@ def test_run_period_covers_leap_day_in_february(admin_client: APIClient) -> None
 
 
 @pytest.mark.django_db
-@freeze_time('2026-04-30')
-def test_run_rejects_month_on_its_last_day(admin_client: APIClient) -> None:
-    resp = admin_client.post('/api/billing/runs/', {'month': '2026-04'}, format='json')
+@freeze_time('2026-05-31')
+def test_run_rejects_month_that_has_not_started(admin_client: APIClient) -> None:
+    resp = admin_client.post('/api/billing/runs/', {'month': '2026-06'}, format='json')
 
     assert resp.status_code == 400
+    assert not BillingRun.objects.exists()
 
 
 @pytest.mark.django_db
-@freeze_time('2026-05-01')
-def test_run_allows_month_from_the_day_after_it_ends(admin_client: APIClient) -> None:
-    resp = admin_client.post('/api/billing/runs/', {'month': '2026-04'}, format='json')
+@freeze_time('2026-06-01')
+def test_run_allows_month_from_its_first_day(admin_client: APIClient) -> None:
+    resp = admin_client.post('/api/billing/runs/', {'month': '2026-06'}, format='json')
 
     assert resp.status_code == 201
+
+
+@pytest.mark.django_db
+@freeze_time('2026-05-15')
+def test_run_bills_current_month_part_way_through(
+    admin_client: APIClient, active_contract: Contract
+) -> None:
+    billed_so_far = _entry(active_contract, datetime.date(2026, 5, 1))
+
+    resp = admin_client.post('/api/billing/runs/', {'month': '2026-05'}, format='json')
+
+    assert resp.status_code == 201
+    assert _billed_entry_ids() == {billed_so_far.pk}
 
 
 @pytest.mark.django_db
@@ -204,16 +218,6 @@ def test_run_that_fails_part_way_saves_nothing(
 
     assert not BillingRun.objects.exists()
     assert not Invoice.objects.exists()
-
-
-@pytest.mark.django_db
-@freeze_time('2026-05-15')
-@pytest.mark.parametrize('month', ['2026-05', '2026-06'])
-def test_run_rejects_month_that_has_not_ended(admin_client: APIClient, month: str) -> None:
-    resp = admin_client.post('/api/billing/runs/', {'month': month}, format='json')
-
-    assert resp.status_code == 400
-    assert not BillingRun.objects.exists()
 
 
 @pytest.mark.django_db
