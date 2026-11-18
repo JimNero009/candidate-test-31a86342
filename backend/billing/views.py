@@ -1,10 +1,14 @@
 import calendar
 import datetime
 from collections import defaultdict
+from functools import partial
+from smtplib import SMTPException
 
 from django.contrib.auth.models import User
+from django.core.mail import send_mail
 from django.db import transaction
 from django.db.models import Prefetch, QuerySet, Sum
+from django.template.loader import render_to_string
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
@@ -17,7 +21,7 @@ from accounts.models import Company, CompanyAdmin, Freelancer
 from accounts.permissions import IsCompanyAdmin
 from contracts.models import TimesheetEntry
 
-from .enums import BillingRunStatus, InvoiceEmailRecipient
+from .enums import BillingRunStatus, InvoiceEmailRecipient, InvoiceEmailStatus
 from .models import BillingRun, Invoice, InvoiceEmail, InvoiceLine
 from .serializers import InvoiceDetailSerializer, InvoiceSerializer
 
@@ -41,6 +45,57 @@ def _parse_month(raw: object) -> tuple[datetime.date, datetime.date]:
             _, last_day = calendar.monthrange(start.year, start.month)
             return start, start.replace(day=last_day)
     raise ValidationError({'month': 'Expected a month in YYYY-MM format.'})
+
+
+# Email sending lives here for now, alongside the run; see CANDIDATE_NOTES.md.
+def _current_address(email: InvoiceEmail) -> str:
+    match InvoiceEmailRecipient(email.recipient):
+        case InvoiceEmailRecipient.COMPANY:
+            return email.invoice.company.billing_email
+        case InvoiceEmailRecipient.FREELANCER:
+            return email.invoice.freelancer.user.email
+
+
+def _attempt_send(email: InvoiceEmail) -> None:
+    invoice = (
+        _company_invoices(email.invoice.company_id)
+        .select_related('company')
+        .get(pk=email.invoice_id)
+    )
+    body = render_to_string(
+        'billing/invoice_email.txt',
+        {'invoice': invoice, 'lines': invoice.invoiceline_set.order_by('date', 'id')},
+    )
+    subject = (
+        f'Invoice {invoice.pk}: {invoice.freelancer.name} for {invoice.company.name}, '
+        f'{invoice.period_start} to {invoice.period_end}'
+    )
+    email.to_address = _current_address(email)
+    try:
+        send_mail(subject, body, None, [email.to_address])
+    except (SMTPException, OSError) as exc:
+        email.status = InvoiceEmailStatus.FAILED
+        email.last_error = str(exc)
+    else:
+        email.status = InvoiceEmailStatus.SENT
+        email.last_error = ''
+        email.sent_at = timezone.now()
+    email.save(update_fields=['to_address', 'status', 'last_error', 'sent_at'])
+
+
+def _send_invoice_emails(email_ids: list[int]) -> None:
+    for email_id in email_ids:
+        # One transaction per email, so a slow or failing send doesn't hold the others.
+        with transaction.atomic():
+            email = (
+                InvoiceEmail.objects.select_for_update(skip_locked=True, of=('self',))
+                .select_related('invoice__company', 'invoice__freelancer__user')
+                .exclude(status=InvoiceEmailStatus.SENT)
+                .filter(pk=email_id)
+                .first()
+            )
+            if email is not None:
+                _attempt_send(email)
 
 
 class BillingRunView(APIView):
@@ -116,6 +171,18 @@ class BillingRunView(APIView):
 
             run.status = BillingRunStatus.COMPLETED
             run.save(update_fields=['status'])
+
+            # Includes emails that failed on earlier runs for this month, so a re-run retries them.
+            unsent_email_ids = list(
+                InvoiceEmail.objects.filter(
+                    invoice__company=company,
+                    invoice__period_start__lte=period_end,
+                    invoice__period_end__gte=period_start,
+                )
+                .exclude(status=InvoiceEmailStatus.SENT)
+                .values_list('id', flat=True)
+            )
+            transaction.on_commit(partial(_send_invoice_emails, unsent_email_ids))
 
         return Response(
             {

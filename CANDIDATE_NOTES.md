@@ -8,3 +8,9 @@
 - Invoice detail returns 404, not 403, for another company's invoice, so invoice IDs can't be probed; matches `ContractDetailView`.
 - Invoice detail includes `company` (name, billing email) since it represents the invoice as a document; the list omits it because it's always the admin's own company. Lines have no separate `amount`: each line bills its `daily_rate`, so an extra field would duplicate it.
 - Only company admins can see invoices. Freelancers seeing their own invoices is a natural follow-up, out of scope here.
+- Emails use an outbox: the run writes one `pending` `InvoiceEmail` row per recipient in the same transaction as the invoices, and only sends via `transaction.on_commit`. An email can never describe an invoice that was rolled back, and an SMTP failure after commit leaves the invoice in place with the row marked `failed` and its error recorded.
+- Re-running billing for a month also retries that month's `pending`/`failed` emails, so the existing Run button is the retry; no extra endpoint.
+- The address is resolved from the company/freelancer on every attempt (a corrected billing email is picked up by the retry) and recorded on the row; once `sent`, a row is never re-sent or re-addressed.
+- Delivery is at-least-once: a crash after the SMTP server accepts a message but before the row is marked `sent` means a retry sends it again. The invoice ID in the subject lets recipients spot duplicates.
+- Each email is sent in its own transaction under `select_for_update(skip_locked=True)`, so concurrent runs can't double-send and one slow/failing send doesn't block the rest. Only `SMTPException`/`OSError` are treated as send failures; anything else propagates and leaves the row `pending` for the next run.
+- Sending lives in `billing/views.py` for now, next to the run, to stay consistent with the no-service-layer decision. When billing goes async it moves to a worker task that sends `pending` rows; the model needs no change for that.
